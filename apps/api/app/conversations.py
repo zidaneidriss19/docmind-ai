@@ -264,13 +264,19 @@ def history(
     user: CurrentUser,
     limit: PageSize = 20,
     offset: Offset = 0,
+    order: Literal["asc", "desc"] = "asc",
 ) -> MessagePage:
     owned_conversation(db, user.id, conversation_id)
+    sort = (
+        (Message.created_at.desc(), Message.id.desc())
+        if order == "desc"
+        else (Message.created_at, Message.id)
+    )
     rows = list(
         db.scalars(
             select(Message)
             .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at, Message.id)
+            .order_by(*sort)
             .offset(offset)
             .limit(limit + 1)
         )

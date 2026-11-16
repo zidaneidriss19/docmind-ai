@@ -2,7 +2,7 @@
 
 Application web pour interroger des documents PDF.
 
-Pour lancer la version actuelle, suis la section **Indexation des PDF (M3)**.
+Pour lancer la version actuelle, suis la section [Utiliser le chat dans le navigateur (M5)](#utiliser-le-chat-dans-le-navigateur-m5).
 
 - `apps/web` contient le frontend React et TypeScript, construit avec Vite.
 - `apps/api` contient l’API FastAPI.
@@ -197,3 +197,17 @@ Dans Swagger, indique `1` dans **X-DocMind-Request** pour les opérations qui mo
 3. Avec `POST /api/v1/conversations`, envoie un `title` et les `document_ids` à interroger.
 4. Envoie une question dans le champ `content` de `POST /api/v1/conversations/{conversation_id}/messages`. La réponse `201` contient le texte et les citations avec numéro de page. Une réponse sans contexte suffisant comporte une liste de citations vide.
 5. Utilise `GET /api/v1/conversations/{conversation_id}/messages` pour relire l’historique.
+
+## Utiliser le chat dans le navigateur (M5)
+
+Démarre les services et l’API comme indiqué dans M3 et M4. Depuis la racine dans un autre PowerShell, lance le frontend.
+
+```powershell
+Set-Location apps/web
+npm.cmd ci
+npm.cmd run dev
+```
+
+Ouvre l’adresse affichée par Vite, généralement http://127.0.0.1:5173. Connecte-toi, puis importe un PDF dans **Documents** et attends son statut **Prêt**. Dans **Conversations**, crée une conversation avec un ou plusieurs PDF, puis pose une question. La réponse s’affiche avec ses sources cliquables. Chaque source ouvre le PDF à la page citée. Utilise **Sources** pour modifier les PDF interrogés et **Historique** pour rouvrir une conversation.
+
+Le frontend commence par les 30 messages les plus récents. L’API conserve son ordre chronologique par défaut et accepte `order=desc` sur la route de l’historique. Le lecteur PDF est chargé lors de l’ouverture d’une citation.

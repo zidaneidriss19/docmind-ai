@@ -1,13 +1,10 @@
-.shell.signed-in { width: min(100% - 2rem, 60rem); padding-top: clamp(2rem, 6vh, 4.5rem); }
-.account-header, .list-heading {
+.list-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: .75rem;
 }
-.account-header p { margin: .25rem 0 0; }
-.account-header h1 { margin: 0; }
 .document-area {
   margin-top: 1.5rem;
   padding-top: 1.5rem;

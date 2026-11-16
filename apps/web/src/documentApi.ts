@@ -46,3 +46,9 @@ export async function downloadDocument(document: DocumentSummary) {
   link.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
+
+export const getDocument = (id: string) =>
+  authenticatedRequest<DocumentSummary>(`/documents/${id}`, 'GET')
+
+export const openDocumentFile = (id: string) =>
+  authenticatedRequest<Blob>(`/documents/${id}/file`, 'GET', undefined, 'blob')
