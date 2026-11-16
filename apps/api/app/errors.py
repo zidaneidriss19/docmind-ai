@@ -38,7 +38,7 @@ async def validation_error(
 ) -> JSONResponse:
     return await api_error(
         request,
-        APIError(422, "VALIDATION_ERROR", "Check the email and password fields."),
+        APIError(422, "VALIDATION_ERROR", "Check the request fields."),
     )
 
 
@@ -49,5 +49,14 @@ async def database_unavailable(
         request,
         APIError(
             503, "DATABASE_UNAVAILABLE", "Temporarily unavailable. Try again later."
+        ),
+    )
+
+
+async def storage_unavailable(request: Request, _exc: Exception) -> JSONResponse:
+    return await api_error(
+        request,
+        APIError(
+            503, "STORAGE_UNAVAILABLE", "Document storage is temporarily unavailable."
         ),
     )

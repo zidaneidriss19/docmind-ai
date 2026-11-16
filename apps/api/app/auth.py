@@ -190,8 +190,7 @@ def logout(request: Request, db: Database) -> Response:
     return response
 
 
-@users.get("/me")
-def me(request: Request, db: Database, response: Response) -> UserProfile:
+def current_user(request: Request, db: Database) -> UserProfile:
     if not (token := request.cookies.get(ACCESS_COOKIE)):
         raise session_required()
     now = datetime.now(UTC)
@@ -205,5 +204,13 @@ def me(request: Request, db: Database, response: Response) -> UserProfile:
     )
     if user is None:
         raise session_required()
-    response.headers["Cache-Control"] = "no-store"
     return UserProfile.model_validate(user)
+
+
+CurrentUser = Annotated[UserProfile, Depends(current_user)]
+
+
+@users.get("/me")
+def me(user: CurrentUser, response: Response) -> UserProfile:
+    response.headers["Cache-Control"] = "no-store"
+    return user

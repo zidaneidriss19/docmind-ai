@@ -1,7 +1,17 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    CHAR,
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -41,4 +51,35 @@ class AuthSession(Base):
     access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     refresh_expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True
+    )
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    filename: Mapped[str] = mapped_column(String(255))
+    storage_key: Mapped[str] = mapped_column(Text, unique=True)
+    mime_type: Mapped[str] = mapped_column(String(100))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    checksum_sha256: Mapped[str] = mapped_column(CHAR(64))
+    status: Mapped[str] = mapped_column(String(20))
+    page_count: Mapped[int | None]
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("size_bytes > 0", name="ck_documents_size"),
+        CheckConstraint("page_count > 0", name="ck_documents_page_count"),
+        CheckConstraint(
+            "status IN ('UPLOADING', 'UPLOADED', 'PROCESSING', 'READY', 'FAILED', 'DELETING')",
+            name="ck_documents_status",
+        ),
+        Index("ix_documents_owner_created", "owner_id", "created_at", "id"),
+        Index("ix_documents_status_updated", "status", "updated_at"),
     )
