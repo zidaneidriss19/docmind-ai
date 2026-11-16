@@ -174,6 +174,11 @@ class ConversationTest(TestCase):
             [item["role"] for item in history["items"]], ["user", "assistant"]
         )
         self.assertEqual(history["items"][1], message)
+        recent = self.client.get(
+            f"{url}/messages", params={"order": "desc", "limit": 1}
+        ).json()
+        self.assertEqual(recent["items"], [message])
+        self.assertEqual(recent["next_offset"], 1)
         self.assertEqual(self.client.delete(url, headers=HEADERS).status_code, 204)
         self.assertEqual(self.client.get(url).status_code, 404)
 

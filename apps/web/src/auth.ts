@@ -21,8 +21,8 @@ interface Credentials {
   password: string
 }
 
-type Method = 'GET' | 'POST' | 'DELETE'
-type Body = Credentials | FormData
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
+type Body = object | FormData
 type ResponseFormat = 'json' | 'blob'
 
 async function request<T>(
