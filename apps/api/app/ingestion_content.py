@@ -5,8 +5,6 @@ from math import isfinite
 from os import environ
 from pathlib import Path
 
-import pymupdf
-
 from app.pdf import MAX_PDF_BYTES
 from app.storage import ObjectStorage
 
@@ -50,6 +48,8 @@ def chunk_page(text: str, page_number: int) -> list[TextChunk]:
 
 
 def extract_pdf(data: bytes) -> tuple[int, list[TextChunk]]:
+    import pymupdf
+
     try:
         with pymupdf.open(stream=data, filetype="pdf") as pdf:
             if pdf.needs_pass:

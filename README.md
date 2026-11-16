@@ -172,3 +172,28 @@ Set-Location apps/api
 Lance le frontend dans un autre terminal. Importe un PDF avec du texte sélectionnable et attends le statut **Prêt**. Chaque fragment conserve son numéro de page et un vecteur de 384 dimensions. La limite est de 500 pages et 2 000 fragments par PDF. Les PDF numérisés sans couche texte affichent un échec explicite. L’OCR est hors périmètre de M3.
 
 Les travaux restent dans PostgreSQL si Redis est indisponible. Un échec temporaire déclenche jusqu’à trois tentatives au total. Une relance manuelle crée un nouveau travail. Les nouveaux fragments sont enregistrés dans la même transaction que le passage à `READY`. La migration ajoute un travail pour chaque PDF déjà importé au statut `UPLOADED`.
+
+## Tester les réponses avec citations (M4)
+
+M4 se teste dans Swagger UI à l’adresse http://127.0.0.1:8000/docs. Garde PostgreSQL/pgvector, Redis, le relais et le worker de M3. Lance également Ollama et prépare le modèle local.
+
+```powershell
+ollama pull qwen2.5:1.5b
+```
+
+L’API M4 utilise aussi MiniLM pour encoder les questions. Avec les variables de la section M3, relance Uvicorn avec le venv Python 3.14 du worker.
+
+```powershell
+.\.venv-worker\Scripts\python.exe -m alembic -c apps/api/alembic.ini upgrade head
+.\.venv-worker\Scripts\python.exe -m uvicorn app.main:app --app-dir apps/api --reload
+```
+
+Le modèle de réponse et son serveur peuvent être configurés avec `DOCMIND_OLLAMA_MODEL` et `DOCMIND_OLLAMA_URL`. Par défaut, Ollama reçoit les questions et passages sur la boucle locale. La recherche filtre les PDF sélectionnés du compte avant de retenir jusqu’à cinq passages.
+
+Dans Swagger, indique `1` dans **X-DocMind-Request** pour les opérations qui modifient des données.
+
+1. Ouvre `POST /api/v1/auth/login`, clique sur **Try it out**, puis connecte-toi. Swagger réutilise les cookies dans la même fenêtre.
+2. Importe un PDF via `POST /api/v1/documents` ou reprends un identifiant via `GET /api/v1/documents`. Attends le statut `READY`.
+3. Avec `POST /api/v1/conversations`, envoie un `title` et les `document_ids` à interroger.
+4. Envoie une question dans le champ `content` de `POST /api/v1/conversations/{conversation_id}/messages`. La réponse `201` contient le texte et les citations avec numéro de page. Une réponse sans contexte suffisant comporte une liste de citations vide.
+5. Utilise `GET /api/v1/conversations/{conversation_id}/messages` pour relire l’historique.
