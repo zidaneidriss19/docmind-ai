@@ -1,6 +1,6 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent } from 'react'
-import { FileText, FolderOpen, Layers3, LogOut, MessageSquare, MessagesSquare, Plus, SquarePen } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent, CSSProperties } from 'react'
+import { Database, FileText, FolderOpen, Layers3, LogOut, MessageSquare, MessagesSquare, PanelLeftClose, PanelLeftOpen, Plus, SquarePen } from 'lucide-react'
 import type { Profile } from './auth'
 import ChatThread from './ChatThread'
 import { getConversation, listConversations, removeConversation } from './chatApi'
@@ -8,7 +8,7 @@ import type { Citation, Conversation } from './chatApi'
 import { chatError } from './chatErrors'
 import DocumentPicker from './DocumentPicker'
 import Documents from './Documents'
-import { uploadDocument } from './documentApi'
+import { fileSize, uploadDocument } from './documentApi'
 import Modal from './Modal'
 import './Workspace.css'
 
@@ -35,11 +35,15 @@ export default function Workspace({ profile, onSignOut, signOutBusy, onSessionEx
   const [deleting, setDeleting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [documentVersion, setDocumentVersion] = useState(0)
+  const [library, setLibrary] = useState<{ count: number; bytes: number } | null>(null)
   const [mobileView, setMobileView] = useState<'chat' | 'pdf'>('chat')
   const [selection, setSelection] = useState<{
-    conversation: string; documentId: string; jump: { page: number; excerpt?: string }
+    conversation: string; documentId: string; jump: { page: number }; citations: Citation[]
   } | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const grid = useRef<HTMLDivElement>(null)
+  const [pdfOpen, setPdfOpen] = useState(true)
+  const [chatShare, setChatShare] = useState(30.5)
 
   useEffect(() => {
     let active = true
@@ -124,13 +128,38 @@ export default function Workspace({ profile, onSignOut, signOutBusy, onSessionEx
   const selected = active && selection?.conversation === active.id ? selection : null
   const documentId = selected?.documentId ?? active?.document_ids[0]
 
-  function openDocument(id: string, source?: Citation) {
+  const showCitations = useCallback((citations: Citation[], focused?: Citation) => {
+    if (!selectedId) return
+    const source = focused ?? citations[0]
+    if (!source) {
+      setSelection((previous) => previous?.conversation === selectedId
+        ? { ...previous, citations: [] } : previous)
+      return
+    }
+    setSelection({ conversation: selectedId, documentId: source.document_id, jump: { page: source.page_number }, citations })
+    if (focused) {
+      setPdfOpen(true)
+      setMobileView('pdf')
+    }
+  }, [selectedId])
+
+  function openDocument(id: string) {
     if (!active) return
-    setSelection({
-      conversation: active.id, documentId: id,
-      jump: { page: source?.page_number ?? 1, excerpt: source?.excerpt },
-    })
+    setSelection((previous) => ({
+      conversation: active.id, documentId: id, jump: { page: 1 },
+      citations: previous?.conversation === active.id ? previous.citations : [],
+    }))
+    setPdfOpen(true)
     setMobileView('pdf')
+  }
+
+  function resize(next: number) {
+    setChatShare(Math.min(48, Math.max(20, next)))
+  }
+
+  function resizeFromPointer(x: number) {
+    const frame = grid.current?.getBoundingClientRect()
+    if (frame?.width) resize(100 * (frame.right - x) / frame.width)
   }
 
   async function importFile(event: ChangeEvent<HTMLInputElement>) {
@@ -168,7 +197,8 @@ export default function Workspace({ profile, onSignOut, signOutBusy, onSessionEx
         </div>
       </header>
       {(accountError || (error && dialog !== 'delete')) && <p className="workspace-error error" role="alert">{accountError || error}</p>}
-      <div className={`workspace-grid ${section === 'documents' ? 'library-layout' : ''}`}>
+      <div ref={grid} style={{ '--chat-width': chatShare + '%' } as CSSProperties}
+        className={`workspace-grid ${section === 'documents' ? 'library-layout' : !pdfOpen ? 'reader-collapsed' : ''}`}>
         <aside className="chat-sidebar" aria-label="Navigation et historique">
           <input ref={fileInput} type="file" hidden accept=".pdf,application/pdf" onChange={importFile} />
           <button className="sidebar-new" type="button" disabled={uploading} onClick={() => fileInput.current?.click()}>
@@ -177,9 +207,11 @@ export default function Workspace({ profile, onSignOut, signOutBusy, onSessionEx
           <nav className="sidebar-navigation" aria-label="Bibliothèque">
             <button type="button" aria-current={section === 'documents' ? 'page' : undefined} onClick={() => { setSection('documents'); setError('') }}>
               <FolderOpen aria-hidden="true" /> Mes documents
+              {library && <span className="sidebar-count">{library.count}</span>}
             </button>
             <button type="button" aria-current={section === 'chat' ? 'page' : undefined} onClick={() => { setSection('chat'); setError('') }}>
               <MessagesSquare aria-hidden="true" /> Conversations
+              {!listLoading && next === null && <span className="sidebar-count">{items.length}</span>}
             </button>
           </nav>
           <div className="sidebar-heading"><h2>Conversations récentes</h2>
@@ -199,26 +231,49 @@ export default function Workspace({ profile, onSignOut, signOutBusy, onSessionEx
           {listLoading && <p role="status">Chargement…</p>}
           {next !== null && <button className="sidebar-more" type="button" onClick={moreConversations}
             disabled={listLoading}>Afficher plus</button>}
+          {library && <div className="sidebar-storage"><Database aria-hidden="true" /><strong>Stockage</strong><span>{fileSize(library.bytes)}</span></div>}
         </aside>
         {section === 'documents' ? (
-          <div className="documents-workspace"><Documents key={documentVersion} onSessionExpired={onSessionExpired} /></div>
+          <div className="documents-workspace"><Documents key={documentVersion} onSessionExpired={onSessionExpired} onSummary={setLibrary} /></div>
         ) : active ? (
           <>
             <div className="document-column">
               <div className="document-heading">
-                <h1>{active.title}</h1>
-                <p>{active.document_ids.length} {active.document_ids.length === 1 ? 'document' : 'documents'}</p>
+                <div>
+                  <h1>{active.title}</h1>
+                  <p>{active.document_ids.length} {active.document_ids.length === 1 ? 'document' : 'documents'}</p>
+                </div>
+                <button type="button" className="secondary reader-hide" aria-label="Masquer le PDF"
+                  title="Masquer le PDF" aria-expanded={pdfOpen} onClick={() => setPdfOpen(false)}>
+                  <PanelLeftClose aria-hidden="true" />
+                </button>
               </div>
               {documentId ? (
                 <Suspense fallback={<p className="reader-loading" role="status">Chargement du lecteur…</p>}>
-                  <PdfPreview key={documentId} documentId={documentId} jump={selected?.jump ?? defaultJump} onSessionExpired={onSessionExpired} />
+                  <PdfPreview key={documentId} documentId={documentId} jump={selected?.jump ?? defaultJump} citations={selected?.citations} onSessionExpired={onSessionExpired} />
                 </Suspense>
               ) : <div className="workspace-empty"><p>Ajoute un PDF prêt dans Sources.</p></div>}
             </div>
+            <div className="reader-resize" role="separator" tabIndex={0} aria-label="Largeur du panneau PDF"
+              aria-orientation="vertical" aria-valuemin={52} aria-valuemax={80} aria-valuenow={Math.round(100 - chatShare)}
+              onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); resizeFromPointer(event.clientX) }}
+              onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) resizeFromPointer(event.clientX) }}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                event.preventDefault()
+                resize(chatShare + (event.key === 'ArrowLeft' ? 2 : -2))
+              }} />
             <div className="chat-main">
+              {!pdfOpen && (
+                <div className="reader-toggle">
+                  <button type="button" className="secondary" aria-expanded={false} onClick={() => setPdfOpen(true)}>
+                    <PanelLeftOpen aria-hidden="true" /> Afficher le PDF
+                  </button>
+                </div>
+              )}
               <ChatThread key={active.id} conversation={active} onSources={() => setDialog('sources')}
                 onRemove={() => { setError(''); setDialog('delete') }} onSessionExpired={onSessionExpired}
-                onCitation={(source) => openDocument(source.document_id, source)} onDocument={openDocument} />
+                onCitations={showCitations} onDocument={openDocument} />
             </div>
             <div className="mobile-reader-nav">
               <button type="button" aria-pressed={mobileView === 'pdf'} onClick={() => setMobileView('pdf')}><FileText /> PDF</button>

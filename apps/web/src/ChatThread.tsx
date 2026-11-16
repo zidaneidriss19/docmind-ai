@@ -8,11 +8,11 @@ import { getDocument } from './documentApi'
 import type { DocumentSummary } from './documentApi'
 
 
-export default function ChatThread({ conversation, onSources, onRemove, onSessionExpired, onCitation, onDocument }: {
+export default function ChatThread({ conversation, onSources, onRemove, onSessionExpired, onCitations, onDocument }: {
   conversation: Conversation
   onSources: () => void
   onRemove: () => void
-  onCitation: (source: Citation) => void
+  onCitations: (sources: Citation[], focused?: Citation) => void
   onDocument: (id: string) => void
   onSessionExpired: () => void
 }) {
@@ -39,6 +39,8 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
         if (!active) return
         jumpToLatest.current = true
         setMessages([...page.items].reverse())
+        const answer = page.items.find((message) => message.role === 'assistant')
+        onCitations(answer?.citations ?? [])
         setNext(page.next_offset)
         setLoading(false)
       },
@@ -49,7 +51,7 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
       },
     )
     return () => { active = false }
-  }, [conversationId, onSessionExpired])
+  }, [conversationId, onSessionExpired, onCitations])
 
   useEffect(() => {
     if (!jumpToLatest.current || !timeline.current) return
@@ -98,6 +100,7 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
     setPending(text)
     try {
       const response = await askQuestion(conversationId, text)
+      onCitations(response.citations)
       const echo: Message = {
         message_id: 'local-' + response.message_id,
         role: 'user',
@@ -189,7 +192,7 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
               {message.citations.length > 0 && (
                 <details className="citation-list" open><summary>Citations ({message.citations.length})</summary>
                   {message.citations.map((source, index) => (
-                    <button className="citation-card" type="button" key={source.id} onClick={() => onCitation(source)}>
+                    <button className="citation-card" type="button" key={source.id} onClick={() => onCitations(message.citations, source)}>
                                             <span className="citation-number">{index + 1}</span>
                       <span className="citation-label">Page {source.page_number}</span>
                       <ArrowUpRight aria-hidden="true" />

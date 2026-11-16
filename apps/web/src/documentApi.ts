@@ -20,8 +20,8 @@ interface DocumentPage {
 const documents = '/documents'
 export const PAGE_SIZE = 20
 
-export const listDocuments = (offset: number) =>
-  authenticatedRequest<DocumentPage>(`${documents}?offset=${offset}&limit=${PAGE_SIZE}`, 'GET')
+export const listDocuments = (offset: number, limit = PAGE_SIZE) =>
+  authenticatedRequest<DocumentPage>(`${documents}?offset=${offset}&limit=${limit}`, 'GET')
 
 export function uploadDocument(file: File) {
   const form = new FormData()
@@ -52,3 +52,11 @@ export const getDocument = (id: string) =>
 
 export const openDocumentFile = (id: string) =>
   authenticatedRequest<Blob>(`/documents/${id}/file`, 'GET', undefined, 'blob')
+
+const number = new Intl.NumberFormat('fr', { maximumFractionDigits: 1 })
+
+export function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} o`
+  if (bytes < 1024 * 1024) return `${number.format(bytes / 1024)} Kio`
+  return `${number.format(bytes / (1024 * 1024))} Mio`
+}

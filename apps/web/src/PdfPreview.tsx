@@ -3,27 +3,54 @@ import { ChevronLeft, ChevronRight, Download, Maximize, Minus, Plus } from 'luci
 import { getDocument as loadPdf, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist'
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import type { Citation } from './chatApi'
 import { chatError } from './chatErrors'
 import { getDocument, openDocumentFile } from './documentApi'
 
 GlobalWorkerOptions.workerSrc = workerUrl
-type Jump = { page: number; excerpt?: string }
+type Jump = { page: number }
+type Rect = { left: number; top: number; width: number; height: number }
+type Highlight = { id: string; number: number; rects: Rect[] }
+const NO_CITATIONS: Citation[] = []
+const normalized = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase()
 
-const normalized = (text: string) => text.replace(/\s+/g, ' ').trim().toLocaleLowerCase()
-
-function highlight(layer: TextLayer, excerpt: string) {
-  const segments = layer.textContentItemsStr.map((text, index) => ({ text: normalized(text), index }))
-    .filter((segment) => segment.text)
-  const text = segments.map((segment) => segment.text).join(' ')
-  const start = text.indexOf(normalized(excerpt))
-  if (start < 0 || !excerpt.trim()) return
-  const end = start + normalized(excerpt).length
-  let offset = 0
-  segments.forEach(({ text: segment, index }) => {
-    if (segment && offset < end && offset + segment.length > start) {
-      layer.textDivs[index]?.classList.add('cited-text')
+function locateCitations(layer: TextLayer, container: HTMLElement, citations: Citation[], page: number): Highlight[] {
+  let text = ''
+  const runs = layer.textContentItemsStr.flatMap((raw, index) => {
+    const value = normalized(raw)
+    const node = layer.textDivs[index]?.firstChild
+    if (!value || !(node instanceof Text)) return []
+    if (text) text += ' '
+    const start = text.length
+    text += value
+    const offsets: number[] = []
+    for (const word of raw.matchAll(/\S+/g)) {
+      const from = word.index
+      if (offsets.length) offsets.push(from - 1)
+      for (let i = 0; i < word[0].length; i++) offsets.push(from + i)
     }
-    offset += segment.length + 1
+    return [{ node, start, end: text.length, offsets }]
+  })
+  const bounds = container.getBoundingClientRect()
+  return citations.flatMap((citation, index) => {
+    if (citation.page_number !== page) return []
+    const excerpt = normalized(citation.excerpt)
+    const start = excerpt ? text.indexOf(excerpt) : -1
+    if (start < 0) return []
+    const end = start + excerpt.length
+    const rects = runs.flatMap((run) => {
+      if (run.end <= start || run.start >= end) return []
+      const from = run.offsets[Math.max(start, run.start) - run.start]
+      const to = run.offsets[Math.min(end, run.end) - run.start - 1]
+      if (from === undefined || to === undefined) return []
+      const range = document.createRange()
+      range.setStart(run.node, from)
+      range.setEnd(run.node, to + 1)
+      return Array.from(range.getClientRects(), (box) => ({
+        left: box.left - bounds.left, top: box.top - bounds.top, width: box.width, height: box.height,
+      }))
+    })
+    return rects.length ? [{ id: citation.id, number: index + 1, rects }] : []
   })
 }
 
@@ -55,9 +82,10 @@ function Thumbnail({ pdf, page, selected, onSelect }: {
   </button>
 }
 
-export default function PdfPreview({ documentId, jump, onSessionExpired }: {
+export default function PdfPreview({ documentId, jump, citations = NO_CITATIONS, onSessionExpired }: {
   documentId: string
   jump: Jump
+  citations?: Citation[]
   onSessionExpired: () => void
 }) {
   const [file, setFile] = useState<{ pdf: PDFDocumentProxy; name: string; url: string } | null>(null)
@@ -71,6 +99,8 @@ export default function PdfPreview({ documentId, jump, onSessionExpired }: {
   const [error, setError] = useState('')
   const [renderError, setRenderError] = useState('')
   const [width, setWidth] = useState(320)
+  const [marks, setMarks] = useState<{ page: number; jump: Jump; items: Highlight[] } | null>(null)
+  const visibleMarks = marks?.page === page && marks.jump === jump ? marks.items : []
   const canvas = useRef<HTMLCanvasElement>(null)
   const textLayer = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLDivElement>(null)
@@ -132,11 +162,17 @@ export default function PdfPreview({ documentId, jump, onSessionExpired }: {
       layer.style.setProperty('--total-scale-factor', String(cssViewport.scale * cssViewport.userUnit))
       overlay = new TextLayer({ textContentSource: source.streamTextContent(), container: layer, viewport: cssViewport })
       await overlay.render()
-      if (active && jump.excerpt && page === jump.page) highlight(overlay, jump.excerpt)
+      if (!active) return
+      const items = locateCitations(overlay, layer, citations.map((citation) =>
+        citation.document_id === documentId ? citation : { ...citation, page_number: -1 },
+      ), page)
+      setMarks({ page, jump, items })
+      const first = items[0]?.rects[0]
+      if (first && page === jump.page) frame.current?.scrollTo(0, Math.max(0, first.top - 85))
     }
     draw(file.pdf).catch(() => { if (active) setRenderError('Aperçu indisponible pour cette page.') })
     return () => { active = false; render?.cancel(); overlay?.cancel(); layer.replaceChildren() }
-  }, [file, page, width, zoom, jump])
+  }, [file, page, width, zoom, jump, citations, documentId])
 
   function go(value: number) {
     const target = Math.min(file?.pdf.numPages ?? 1, Math.max(1, Math.trunc(value) || 1))
@@ -188,6 +224,19 @@ export default function PdfPreview({ documentId, jump, onSessionExpired }: {
           <div className="pdf-sheet" hidden={!file || Boolean(renderError)}>
             <canvas ref={canvas} aria-hidden="true" />
             <div className="textLayer" ref={textLayer} />
+            <div className="pdf-citation-overlay" aria-hidden="true">
+              {visibleMarks.map(({ id, number, rects }) => {
+                const last = rects[rects.length - 1]
+                return (
+                  <div key={id}>
+                    {rects.map((rect, index) => <span key={index} className="cited-text" style={rect} />)}
+                    <span className="pdf-citation-badge" style={{ top: last.top, left: `min(${last.left + last.width + 4}px, calc(100% - 3.55rem))` }}>
+                      <b>{number}</b> p.{page}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
       </div>

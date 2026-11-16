@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import { Check, Database, EllipsisVertical, File, FileText, FolderOpen, LayoutGrid, List, RefreshCw, Search, TriangleAlert } from 'lucide-react'
 import { ApiError } from './auth'
 import {
-  PAGE_SIZE, deleteDocument, downloadDocument, listDocuments, retryDocument, uploadDocument,
+  deleteDocument, downloadDocument, fileSize, listDocuments, retryDocument,
 } from './documentApi'
 import type { DocumentStatus, DocumentSummary } from './documentApi'
+import Modal from './Modal'
 import './Documents.css'
 
 const statusLabels: Record<DocumentStatus, string> = {
@@ -24,15 +25,7 @@ const processingErrors: Record<string, string> = {
   WORKER_INTERRUPTED: 'L’indexation a été interrompue. Tu peux la relancer.',
 }
 
-const number = new Intl.NumberFormat('fr', { maximumFractionDigits: 1 })
 const date = new Intl.DateTimeFormat('fr', { dateStyle: 'medium' })
-const maxBytes = 20 * 1024 * 1024
-
-function fileSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} o`
-  if (bytes < 1024 * 1024) return `${number.format(bytes / 1024)} Kio`
-  return `${number.format(bytes / (1024 * 1024))} Mio`
-}
 
 function documentError(reason: unknown) {
   if (reason instanceof ApiError) {
@@ -53,47 +46,66 @@ function documentError(reason: unknown) {
   return 'L’opération a échoué. Réessaie dans un instant.'
 }
 
-export default function Documents({ onSessionExpired }: { onSessionExpired: () => void }) {
-  const [offset, setOffset] = useState(0)
-  const [reload, setReload] = useState(0)
-  const [page, setPage] = useState<Awaited<ReturnType<typeof listDocuments>> | null>(null)
+export default function Documents({ onSessionExpired, onSummary }: {
+  onSessionExpired: () => void
+  onSummary: (total: { count: number; bytes: number }) => void
+}) {
+  const [documents, setDocuments] = useState<DocumentSummary[]>([])
+  const [version, setVersion] = useState(0)
+  const [query, setQuery] = useState('')
+  const [status, setStatus] = useState('all')
+  const [sort, setSort] = useState('newest')
+  const [view, setView] = useState<'grid' | 'list'>('grid')
+  const [visible, setVisible] = useState(24)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [removing, setRemoving] = useState<string | null>(null)
-  const input = useRef<HTMLInputElement>(null)
+  const [removing, setRemoving] = useState<DocumentSummary | null>(null)
+  const search = useRef<HTMLInputElement>(null)
+  const pending = (document: DocumentSummary) => document.status === 'PROCESSING' || document.status === 'UPLOADED'
 
   useEffect(() => {
-    let current = true
-    let poll: number | undefined
-    listDocuments(offset).then(
-      (result) => {
-        if (!current) return
-        setPage(result)
-        setLoading(false)
-        if (result.items.some(({ status }) => status === 'UPLOADED' || status === 'PROCESSING')) {
-          poll = window.setTimeout(() => setReload((value) => value + 1), 3000)
+    const focus = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        search.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', focus)
+    return () => window.removeEventListener('keydown', focus)
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    let timer: number | undefined
+    async function load() {
+      try {
+        const all = new Map<string, DocumentSummary>()
+        let offset: number | null = 0
+        while (offset !== null && active) {
+          const page = await listDocuments(offset, 100)
+          page.items.forEach((document) => all.set(document.id, document))
+          offset = page.next_offset
         }
-      },
-      (reason: unknown) => {
-        if (!current) return
+        if (!active) return
+        const result = [...all.values()]
+        setDocuments(result)
+        onSummary({ count: result.length, bytes: result.reduce((total, document) => total + document.size_bytes, 0) })
+        if (result.some((item) => item.status === 'UPLOADED' || item.status === 'PROCESSING')) {
+          timer = window.setTimeout(() => setVersion((value) => value + 1), 3000)
+        }
+      } catch (reason) {
+        if (!active) return
         if (reason instanceof ApiError && reason.status === 401) onSessionExpired()
         else setError(documentError(reason))
-        setLoading(false)
-      },
-    )
-    return () => {
-      current = false
-      window.clearTimeout(poll)
+      } finally {
+        if (active) setLoading(false)
+      }
     }
-  }, [offset, reload, onSessionExpired])
-
-  function load(newOffset = offset) {
-    setLoading(true)
-    setOffset(newOffset)
-    setReload((value) => value + 1)
-  }
+    void load()
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [version, onSessionExpired, onSummary])
 
   async function perform(action: () => Promise<void>) {
     setError('')
@@ -109,104 +121,111 @@ export default function Documents({ onSessionExpired }: { onSessionExpired: () =
     }
   }
 
-  function upload(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const file = input.current?.files?.[0]
-    if (!file) return
-    if (file.size > maxBytes) {
-      setError('Le PDF dépasse la limite de 20 Mio.')
-      return
-    }
-    void perform(async () => {
-      const document = await uploadDocument(file)
-      if (input.current) input.current.value = ''
-      setNotice(`${document.filename} a été importé.`)
-      load(0)
-    })
-  }
-
-  function remove(document: DocumentSummary) {
-    void perform(async () => {
-      await deleteDocument(document.id)
-      setRemoving(null)
-      setNotice(`${document.filename} a été retiré de tes documents.`)
-      load(offset > 0 && page?.items.length === 1 ? offset - PAGE_SIZE : offset)
-    })
-  }
+  const stats = [
+    { label: 'Total des documents', count: documents.length, icon: File, color: 'total' },
+    { label: 'Prêts', count: documents.filter((item) => item.status === 'READY').length, icon: Check, color: 'ready' },
+    { label: 'En cours', count: documents.filter(pending).length, icon: RefreshCw, color: 'pending' },
+    { label: 'En échec', count: documents.filter((item) => item.status === 'FAILED').length, icon: TriangleAlert, color: 'failed' },
+  ]
+  const filtered = documents.filter((document) =>
+    document.filename.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()) &&
+    (status === 'all' || (status === 'pending' ? pending(document) : document.status === status))
+  ).sort((first, second) => {
+    if (sort === 'name') return first.filename.localeCompare(second.filename, 'fr')
+    if (sort === 'oldest') return Date.parse(first.created_at) - Date.parse(second.created_at)
+    return Date.parse(second.created_at) - Date.parse(first.created_at)
+  })
 
   return (
     <section className="document-area" aria-labelledby="documents-title">
-      <h2 id="documents-title">Mes documents</h2>
-      <form className="upload-form" onSubmit={upload}>
-        <div className="field">
-          <label htmlFor="document-file">Fichier PDF</label>
-          <input id="document-file" type="file" ref={input} accept=".pdf,application/pdf"
-            required disabled={busy} aria-describedby="file-hint" />
-          <small id="file-hint">20 Mio maximum. Le fichier doit être sans mot de passe.</small>
+      <header className="library-heading">
+        <h1 id="documents-title"><FolderOpen aria-hidden="true" /> Mes documents{loading ? '' : ` (${documents.length})`}</h1>
+        <p>Gère tes PDF, suis leur indexation et retrouve les documents à interroger.</p>
+      </header>
+      <div className="library-tools">
+        <label className="library-search">
+          <Search aria-hidden="true" />
+          <input ref={search} type="search" aria-label="Rechercher des documents" placeholder="Rechercher des documents…"
+            value={query} onChange={(event) => { setQuery(event.target.value); setVisible(24) }} />
+          <kbd>Ctrl + K</kbd>
+        </label>
+        <select aria-label="Filtrer par statut" value={status} onChange={(event) => { setStatus(event.target.value); setVisible(24) }}>
+          <option value="all">Tous les statuts</option><option value="READY">Prêts</option>
+          <option value="pending">En cours</option><option value="FAILED">En échec</option>
+        </select>
+        <select aria-label="Trier les documents" value={sort} onChange={(event) => setSort(event.target.value)}>
+          <option value="newest">Plus récents</option><option value="oldest">Plus anciens</option><option value="name">Nom du fichier</option>
+        </select>
+        <div className="library-view" aria-label="Mode d’affichage">
+          <button type="button" aria-label="Afficher en grille" aria-pressed={view === 'grid'} onClick={() => setView('grid')}><LayoutGrid /></button>
+          <button type="button" aria-label="Afficher en liste" aria-pressed={view === 'list'} onClick={() => setView('list')}><List /></button>
         </div>
-        <button className="primary" disabled={busy}>Importer</button>
-      </form>
-      {error && <p className="error" role="alert">{error}</p>}
-      {notice && <p className="document-notice" role="status">{notice}</p>}
-      <div className="list-heading">
-        <h3>Fichiers importés</h3>
-        <button className="secondary" type="button" disabled={busy || loading} onClick={() => {
-          setError('')
-          load()
-        }}>Actualiser</button>
       </div>
-      <div aria-busy={loading || busy}>
-        {loading && <p role="status">Chargement des documents…</p>}
-        {!loading && page?.items.length === 0 && <p>Aucun document importé.</p>}
-        <ul className="document-list">
-          {page?.items.map((document) => (
-            <li key={document.id} className="document-item">
-              <div className="document-info">
-                <strong>{document.filename}</strong>
-                <span>{fileSize(document.size_bytes)} · {date.format(new Date(document.created_at))}</span>
-                <span className="document-status" aria-live="polite">
-                  {statusLabels[document.status]}
-                  {document.page_count !== null && ' · ' + document.page_count + (document.page_count === 1 ? ' page' : ' pages')}
-                </span>
-                {document.status === 'FAILED' && document.processing_error && (
-                  <span>{processingErrors[document.processing_error] ?? 'Le service est indisponible. Tu peux relancer l’indexation.'}</span>
-                )}
+      <div className="library-stats">
+        {stats.map(({ label, count, icon: Icon, color }) => (
+          <div className="library-stat" key={label}>
+            <span className={`stat-icon ${color}`}><Icon aria-hidden="true" /></span>
+            <div><strong>{loading ? '–' : count}</strong><span>{label}</span></div>
+          </div>
+        ))}
+      </div>
+      {error && !removing && <p className="error" role="alert">{error} <button className="secondary" type="button"
+        onClick={() => { setError(''); setVersion((value) => value + 1) }}>Actualiser</button></p>}
+      {notice && <p role="status" className="library-notice">{notice}</p>}
+      {loading && <p role="status">Chargement des documents…</p>}
+      {!loading && !filtered.length && <p>{documents.length ? 'Aucun PDF ne correspond à ces filtres.' : 'Aucun document importé. Utilise « Importer un PDF » pour commencer.'}</p>}
+      <ul className={`library-files ${view}`} aria-busy={busy || loading}>
+        {filtered.slice(0, visible).map((document) => (
+          <li className="library-file" key={document.id}>
+            <div className="library-file-top">
+              <span className="file-icon" aria-hidden="true"><FileText />PDF</span>
+              <div className="library-file-info">
+                <strong title={document.filename}>{document.filename}</strong>
+                <span><FileText aria-hidden="true" />{document.page_count === null ? 'Pages en attente' : `${document.page_count} page${document.page_count === 1 ? '' : 's'}`}</span>
+                <span><Database aria-hidden="true" />{fileSize(document.size_bytes)}</span>
               </div>
-              {removing === document.id ? (
-                <div className="document-actions" role="group" aria-label={`Supprimer ${document.filename}`}>
-                  <span>Supprimer ce PDF ?</span>
-                  <button className="secondary danger" type="button" disabled={busy || loading}
-                    onClick={() => remove(document)}>Confirmer</button>
-                  <button className="secondary" type="button" disabled={busy}
-                    onClick={() => setRemoving(null)}>Annuler</button>
+              <details className="library-file-menu">
+                <summary aria-label={`Actions pour ${document.filename}`}><EllipsisVertical aria-hidden="true" /></summary>
+                <div>
+                  <button type="button" disabled={busy} onClick={() => void perform(() => downloadDocument(document))}>Télécharger</button>
+                  {document.status === 'FAILED' && <button type="button" disabled={busy} onClick={() => void perform(async () => {
+                    await retryDocument(document.id)
+                    setVersion((value) => value + 1)
+                  })}>Relancer</button>}
+                  <button type="button" className="danger" disabled={busy} onClick={() => setRemoving(document)}>Supprimer</button>
                 </div>
-              ) : (
-                <div className="document-actions">
-                  <button className="secondary" type="button" disabled={busy || loading}
-                    aria-label={`Télécharger ${document.filename}`}
-                    onClick={() => void perform(() => downloadDocument(document))}>Télécharger</button>
-                  {document.status === 'FAILED' && <button className="secondary" type="button"
-                    disabled={busy || loading} onClick={() => void perform(async () => {
-                      await retryDocument(document.id)
-                      load()
-                    })}>Relancer</button>}
-                  <button className="secondary danger" type="button" disabled={busy || loading}
-                    aria-label={`Supprimer ${document.filename}`}
-                    onClick={() => setRemoving(document.id)}>Supprimer</button>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-        {(offset > 0 || page?.next_offset != null) && (
-          <nav className="document-actions" aria-label="Pages des documents">
-            <button type="button" className="secondary" disabled={offset === 0 || loading || busy}
-              onClick={() => load(Math.max(0, offset - PAGE_SIZE))}>Précédent</button>
-            <button type="button" className="secondary" disabled={page?.next_offset == null || loading || busy}
-              onClick={() => { if (page?.next_offset != null) load(page.next_offset) }}>Suivant</button>
-          </nav>
-        )}
-      </div>
+              </details>
+            </div>
+            <div className="library-file-bottom">
+              <span className={`file-status ${document.status.toLowerCase()}`}>
+                {document.status === 'READY' ? <Check /> : document.status === 'FAILED' ? <TriangleAlert /> : <RefreshCw />}
+                {statusLabels[document.status]}
+              </span>
+              {pending(document) ? <span className="indexing-track" aria-hidden="true" />
+                : <time dateTime={document.created_at}>{date.format(new Date(document.created_at))}</time>}
+            </div>
+            {document.status === 'FAILED' && document.processing_error && (
+              <small className="file-error">{processingErrors[document.processing_error] ?? 'Tu peux relancer l’indexation.'}</small>
+            )}
+          </li>
+        ))}
+      </ul>
+      {filtered.length > visible && <button className="secondary library-more" type="button" onClick={() => setVisible(visible + 24)}>Afficher plus de PDF</button>}
+      {removing && (
+        <Modal title="Supprimer ce PDF ?" onClose={() => setRemoving(null)}>
+          <p>{removing.filename}</p>
+          {error && <p className="error" role="alert">{error}</p>}
+          <div className="dialog-actions">
+            <button className="secondary" type="button" onClick={() => setRemoving(null)}>Annuler</button>
+            <button className="workspace-primary danger-solid" type="button" disabled={busy} onClick={() => void perform(async () => {
+              await deleteDocument(removing.id)
+              setRemoving(null)
+              setNotice(`${removing.filename} a été supprimé.`)
+              setVersion((value) => value + 1)
+            })}>Confirmer</button>
+          </div>
+        </Modal>
+      )}
     </section>
   )
 }
