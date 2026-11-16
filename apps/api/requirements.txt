@@ -9,3 +9,4 @@ SQLAlchemy==2.1.8
 boto3==1.44.3
 pypdf==7.1.0
 python-multipart==0.0.34
+pgvector==0.5.1

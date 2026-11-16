@@ -18,6 +18,7 @@ from starlette.formparsers import MultiPartException
 
 from app.auth import CurrentUser, Database, require_same_origin_request
 from app.errors import APIError
+from app.ingestion_queue import cancel_document_jobs, enqueue_document
 from app.models import Document
 from app.pdf import CHUNK_BYTES, MAX_MULTIPART_BYTES, pdf_metadata, too_large
 from app.storage import StorageError, get_storage
@@ -45,6 +46,7 @@ class DocumentResponse(BaseModel):
     size_bytes: int
     page_count: int | None
     status: DocumentStatus
+    processing_error: str | None = None
     created_at: datetime
 
 
@@ -52,6 +54,7 @@ class DocumentState(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     status: DocumentStatus
+    processing_error: str | None = None
     page_count: int | None
     updated_at: datetime
 
@@ -119,6 +122,7 @@ def persist_pdf(db: Session, owner_id: UUID, file: UploadFile) -> DocumentRespon
             raise APIError(503, "UPLOAD_EXPIRED", "The upload expired. Try again.")
         storage.put(key, file.file, size)
         document.status = "UPLOADED"
+        enqueue_document(db, document.id)
         db.flush()
         return DocumentResponse.model_validate(document)
 
@@ -257,6 +261,7 @@ def delete_document(
 ) -> DeletionAccepted:
     document = owned_document(db, user.id, document_id, lock=True)
     document.status = "DELETING"
+    cancel_document_jobs(db, document.id)
     db.commit()
     try:
         with db.begin():
@@ -278,6 +283,8 @@ def retry_document(document_id: UUID, db: Database, user: CurrentUser) -> Docume
         )
     document.status = "UPLOADED"
     document.page_count = None
+    document.processing_error = None
+    enqueue_document(db, document.id)
     db.flush()
     result = DocumentState.model_validate(document)
     db.commit()
