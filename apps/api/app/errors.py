@@ -8,11 +8,19 @@ from sqlalchemy.exc import OperationalError
 
 
 class APIError(Exception):
-    def __init__(self, status: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        self.headers = headers or {}
 
 
 async def api_error(request: Request, exc: APIError) -> JSONResponse:
@@ -29,7 +37,11 @@ async def api_error(request: Request, exc: APIError) -> JSONResponse:
         },
         status_code=exc.status,
         media_type="application/problem+json",
-        headers={"Cache-Control": "no-store", "X-Request-ID": request_id},
+        headers={
+            **exc.headers,
+            "Cache-Control": "no-store",
+            "X-Request-ID": request_id,
+        },
     )
 
 

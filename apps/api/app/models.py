@@ -153,3 +153,14 @@ class DocumentChunk(Base):
         CheckConstraint("chunk_index >= 0", name="ck_document_chunks_index"),
         CheckConstraint("page_number > 0", name="ck_document_chunks_page"),
     )
+
+
+class RequestLimit(Base):
+    __tablename__ = "request_limits"
+
+    scope: Mapped[str] = mapped_column(String(30), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hits: Mapped[int]
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    __table_args__ = (CheckConstraint("hits > 0", name="ck_request_limits_hits"),)

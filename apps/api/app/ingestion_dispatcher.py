@@ -1,16 +1,18 @@
 import argparse
 import logging
-from time import sleep
+from time import monotonic, sleep
 from uuid import UUID
 
 from kombu.exceptions import OperationalError
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.celery_app import celery
 from app.database import database_engine
 from app.ingestion import publish_pending, recover_expired
 from app.ingestion_queue import TASK_NAME, PublishError
+from app.rate_limit import prune_limits
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +34,14 @@ def main() -> int:
     once = parser.parse_args().once
     logging.basicConfig(level=logging.INFO)
     engine = database_engine()
+    next_cleanup = 0.0
     try:
         while True:
             try:
+                if monotonic() >= next_cleanup:
+                    with Session(engine) as db:
+                        prune_limits(db)
+                    next_cleanup = monotonic() + 1800
                 recover_expired(engine)
                 publish_pending(engine, send_job)
             except SQLAlchemyError as exc:

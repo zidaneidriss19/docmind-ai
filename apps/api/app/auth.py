@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.errors import APIError
 from app.models import AuthSession, User
+from app.rate_limit import client_address, enforce
 
 ACCESS_COOKIE = "docmind_access"
 REFRESH_COOKIE = "docmind_refresh"
@@ -100,7 +101,10 @@ def issue_cookies(response: Response, row: AuthSession, now: datetime) -> None:
 
 
 @auth.post("/register", status_code=201)
-def register(payload: Registration, db: Database, response: Response) -> UserProfile:
+def register(
+    payload: Registration, db: Database, response: Response, request: Request
+) -> UserProfile:
+    enforce(db, "register-ip", client_address(request), 30, 600)
     email = payload.email.casefold()
     if len(email) > 254:
         raise APIError(422, "VALIDATION_ERROR", "The normalized email is too long.")
@@ -126,7 +130,12 @@ def register(payload: Registration, db: Database, response: Response) -> UserPro
 
 
 @auth.post("/login")
-def login(payload: Credentials, db: Database, response: Response) -> UserProfile:
+def login(
+    payload: Credentials, db: Database, response: Response, request: Request
+) -> UserProfile:
+    address = client_address(request)
+    enforce(db, "login-ip", address, 60, 600)
+    enforce(db, "login-account-ip", f"{address}|{payload.email.casefold()}", 5, 60)
     email = payload.email.casefold()
     with db.begin():
         user = db.scalar(select(User).where(func.lower(User.email) == email))
