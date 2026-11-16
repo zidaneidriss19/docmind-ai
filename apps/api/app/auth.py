@@ -7,7 +7,7 @@ from uuid import UUID
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -44,13 +44,18 @@ class UserProfile(BaseModel):
     created_at: datetime
 
 
-def require_same_origin_request(request: Request) -> None:
+def require_same_origin_request(
+    request: Request,
+    marker: Annotated[
+        str | None,
+        Header(
+            alias="X-DocMind-Request", description="Enter 1 for same-origin mutations."
+        ),
+    ] = None,
+) -> None:
     # Cross-origin scripts need a successful CORS preflight to send this header.
     # HTML forms cannot set it. The API does not enable cross-origin requests.
-    if (
-        request.headers.get("x-docmind-request") != "1"
-        or request.headers.get("sec-fetch-site") == "cross-site"
-    ):
+    if marker != "1" or request.headers.get("sec-fetch-site") == "cross-site":
         raise APIError(403, "CSRF_REJECTED", "A same-origin request is required.")
 
 

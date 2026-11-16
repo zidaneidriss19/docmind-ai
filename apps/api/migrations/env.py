@@ -1,8 +1,8 @@
 from alembic import context
 from sqlalchemy import pool
 
+from app.chat_models import Base
 from app.database import database_url
-from app.models import Base
 
 if context.is_offline_mode():
     context.configure(
