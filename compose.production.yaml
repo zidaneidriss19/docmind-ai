@@ -1,0 +1,171 @@
+name: docmind-production
+
+x-logging: &bounded-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app: &app
+  image: ${DOCMIND_API_IMAGE:-docmind-api:local}
+  environment: &runtime-env
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: ${POSTGRES_DB:-docmind}
+    POSTGRES_USER: ${DOCMIND_APP_DB_USER:-docmind_app}
+    POSTGRES_PASSWORD: ${DOCMIND_APP_DB_PASSWORD:?Set the app PostgreSQL password}
+    DOCMIND_BROKER_URL: redis://redis:6379/0
+    DOCMIND_API_DOCS: ${DOCMIND_API_DOCS:-false}
+    DOCMIND_COOKIE_SECURE: ${DOCMIND_COOKIE_SECURE:-true}
+    DOCMIND_STORAGE_BACKEND: ${DOCMIND_STORAGE_BACKEND:-s3}
+    DOCMIND_STORAGE_DIR: /var/lib/docmind/documents
+    DOCMIND_S3_BUCKET: ${DOCMIND_S3_BUCKET:-}
+    DOCMIND_S3_ENDPOINT: ${DOCMIND_S3_ENDPOINT:-}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    DOCMIND_OLLAMA_URL: ${DOCMIND_OLLAMA_URL:?Set the private Ollama endpoint}
+    DOCMIND_OLLAMA_MODEL: ${DOCMIND_OLLAMA_MODEL:-qwen2.5:1.5b}
+    DOCMIND_EMBEDDING_CACHE: /var/lib/docmind/models
+    HF_HOME: /var/lib/docmind/models/huggingface
+    HF_HUB_DISABLE_XET: "1"
+    UVICORN_FORWARDED_ALLOW_IPS: ${DOCMIND_PROXY_IP:-172.30.27.2}
+  volumes:
+    - documents:/var/lib/docmind/documents
+    - embedding-models:/var/lib/docmind/models
+  networks: [data, outbound]
+  init: true
+  read_only: true
+  tmpfs: ["/tmp:size=128m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging: *bounded-logs
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg18-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docmind}
+      POSTGRES_USER: ${POSTGRES_USER:-docmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong PostgreSQL password}
+      DOCMIND_APP_DB_USER: ${DOCMIND_APP_DB_USER:-docmind_app}
+      DOCMIND_APP_DB_PASSWORD: ${DOCMIND_APP_DB_PASSWORD:?Set the app PostgreSQL password}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./infra/production/init-runtime-role.sh:/docker-entrypoint-initdb.d/01-runtime-role.sh:ro
+    networks: [data]
+    logging: *bounded-logs
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 4s
+      retries: 15
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks: [data]
+    logging: *bounded-logs
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 4s
+      retries: 15
+
+  migrate:
+    <<: *app
+    environment:
+      <<: *runtime-env
+      POSTGRES_USER: ${POSTGRES_USER:-docmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong PostgreSQL password}
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *app
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    networks: [data, ingress, outbound]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/ready', timeout=3).close()"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+      start_period: 10s
+
+  worker:
+    <<: *app
+    restart: unless-stopped
+    command: ["python", "-m", "celery", "-A", "app.celery_app:celery", "worker", "--concurrency=1", "--loglevel=info"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  dispatcher:
+    <<: *app
+    restart: unless-stopped
+    command: ["python", "-m", "app.ingestion_dispatcher"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  storage-recovery:
+    <<: *app
+    restart: unless-stopped
+    command: ["python", "-m", "app.recover_storage", "--watch"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  warmup:
+    <<: *app
+    profiles: [tools]
+    command: ["python", "-c", "from app.ingestion_content import embedding_model; embedding_model()"]
+
+  gateway:
+    image: ${DOCMIND_WEB_IMAGE:-docmind-web:local}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      DOCMIND_SITE_ADDRESS: ${DOCMIND_SITE_ADDRESS:-http://:80}
+    ports:
+      - "${DOCMIND_BIND_ADDRESS:-127.0.0.1}:${DOCMIND_HTTP_PORT:-8080}:80"
+      - "${DOCMIND_BIND_ADDRESS:-127.0.0.1}:${DOCMIND_HTTPS_PORT:-8443}:443"
+    networks:
+      ingress:
+        ipv4_address: ${DOCMIND_PROXY_IP:-172.30.27.2}
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    logging: *bounded-logs
+    depends_on:
+      api: {condition: service_healthy}
+
+networks:
+  data:
+    internal: true
+  outbound:
+  ingress:
+    ipam:
+      config:
+        - subnet: ${DOCMIND_PROXY_SUBNET:-172.30.27.0/28}
+          ip_range: ${DOCMIND_PROXY_DYNAMIC_RANGE:-172.30.27.8/29}
+
+volumes:
+  postgres-data:
+  redis-data:
+  documents:
+  embedding-models:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,70 @@
+name: Release images
+
+on:
+  pull_request:
+    paths:
+      - 'apps/**'
+      - 'infra/production/**'
+      - 'compose.production.yaml'
+      - '.dockerignore'
+      - '.github/workflows/release.yml'
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Build and verify production stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build images
+        run: |
+          mkdir -p .release-check
+          printf '%s\n' \
+            "POSTGRES_PASSWORD=$(openssl rand -hex 32)" \
+            "DOCMIND_APP_DB_PASSWORD=$(openssl rand -hex 32)" \
+            "DOCMIND_OLLAMA_URL=http://127.0.0.1:11434" \
+            "DOCMIND_STORAGE_BACKEND=local" \
+            "DOCMIND_COOKIE_SECURE=false" > .release-check/compose.env
+          docker compose --env-file .release-check/compose.env -f compose.production.yaml build api gateway
+      - name: Start and smoke test
+        run: |
+          docker compose --env-file .release-check/compose.env -f compose.production.yaml up -d --no-build --wait --wait-timeout 120
+          python3 infra/production/smoke.py http://127.0.0.1:8080
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          docker compose --env-file .release-check/compose.env -f compose.production.yaml ps -a
+          docker compose --env-file .release-check/compose.env -f compose.production.yaml logs --tail=60
+      - name: Stop the isolated stack
+        if: always()
+        run: docker compose --env-file .release-check/compose.env -f compose.production.yaml down -v
+
+  publish:
+    name: Publish versioned images
+    if: github.ref_type == 'tag'
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and publish to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          api="${name}-api:${GITHUB_REF_NAME}"
+          web="${name}-web:${GITHUB_REF_NAME}"
+          docker build -f apps/api/Dockerfile -t "$api" .
+          docker build -f apps/web/Dockerfile -t "$web" .
+          docker push "$api"
+          docker push "$web"
+          printf 'Release images\n\n- `%s`\n- `%s`\n' "$api" "$web" >> "$GITHUB_STEP_SUMMARY"

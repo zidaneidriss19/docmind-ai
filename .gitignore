@@ -10,3 +10,4 @@ node_modules/
 dist/
 .docmind-data/
 .venv-worker/
+!.env.production.example
