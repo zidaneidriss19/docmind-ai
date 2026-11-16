@@ -1,7 +1,12 @@
 from typing import Literal
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
+from sqlalchemy.exc import OperationalError
+
+from app.auth import auth, users
+from app.errors import APIError, api_error, database_unavailable, validation_error
 
 
 class HealthResponse(BaseModel):
@@ -9,6 +14,11 @@ class HealthResponse(BaseModel):
 
 
 app = FastAPI(title="DocMind AI")
+app.add_exception_handler(APIError, api_error)
+app.add_exception_handler(RequestValidationError, validation_error)
+app.add_exception_handler(OperationalError, database_unavailable)
+app.include_router(auth, prefix="/api/v1")
+app.include_router(users, prefix="/api/v1")
 
 
 @app.get("/health", tags=["health"])
