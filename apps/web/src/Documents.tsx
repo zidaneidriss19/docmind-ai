@@ -30,6 +30,8 @@ const date = new Intl.DateTimeFormat('fr', { dateStyle: 'medium' })
 function documentError(reason: unknown) {
   if (reason instanceof ApiError) {
     switch (reason.code) {
+      case 'RATE_LIMITED':
+        return 'Trop de requêtes. Attends un instant avant de réessayer.'
       case 'PDF_TOO_LARGE':
         return 'Le PDF dépasse la limite de 20 Mio.'
       case 'ENCRYPTED_PDF':

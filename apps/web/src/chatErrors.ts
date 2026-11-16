@@ -8,6 +8,8 @@ export function chatError(error: unknown, onSessionExpired: () => void) {
     }
 
     switch (error.code) {
+      case 'RATE_LIMITED':
+        return 'Trop de requêtes. Attends un instant avant de réessayer.'
       case 'DOCUMENT_NOT_READY':
       case 'NO_READY_DOCUMENTS':
         return 'Sélectionne au moins un PDF dont le statut est Prêt.'

@@ -8,6 +8,8 @@ import './App.css'
 function errorText(error: unknown) {
   if (error instanceof ApiError) {
     switch (error.code) {
+      case 'RATE_LIMITED':
+        return 'Trop de requêtes. Attends un instant avant de réessayer.'
       case 'INVALID_CREDENTIALS':
         return 'Adresse e-mail ou mot de passe incorrect.'
       case 'EMAIL_ALREADY_REGISTERED':

@@ -21,6 +21,7 @@ from app.errors import APIError
 from app.ingestion_queue import cancel_document_jobs, enqueue_document
 from app.models import Document
 from app.pdf import CHUNK_BYTES, MAX_MULTIPART_BYTES, pdf_metadata, too_large
+from app.rate_limit import enforce
 from app.storage import StorageError, get_storage
 
 PUBLIC_STATES = ("UPLOADED", "PROCESSING", "READY", "FAILED")
@@ -147,6 +148,7 @@ def persist_pdf(db: Session, owner_id: UUID, file: UploadFile) -> DocumentRespon
     },
 )
 async def upload(request: Request, db: Database, user: CurrentUser) -> DocumentResponse:
+    await run_in_threadpool(enforce, db, "upload-user", str(user.id), 15, 60)
     if (
         request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         != "multipart/form-data"

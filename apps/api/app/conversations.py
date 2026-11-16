@@ -13,6 +13,7 @@ from app.documents import prevent_caching
 from app.errors import APIError
 from app.models import Document, DocumentChunk
 from app.rag import Answer, generate_answer, query_vector, retrieve, revalidate_sources
+from app.rate_limit import enforce
 
 MUTATION = [Depends(require_same_origin_request)]
 router = APIRouter(
@@ -316,6 +317,7 @@ def save_answer(
 def ask(
     conversation_id: UUID, payload: Question, db: Database, user: CurrentUser
 ) -> MessageResponse:
+    enforce(db, "question-user", str(user.id), 12, 60)
     owned_conversation(db, user.id, conversation_id, lock=True)
     ready = db.scalar(
         select(Document.id)

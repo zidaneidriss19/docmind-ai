@@ -211,3 +211,29 @@ npm.cmd run dev
 Ouvre l’adresse affichée par Vite, généralement http://127.0.0.1:5173. Connecte-toi, puis importe un PDF dans **Documents** et attends son statut **Prêt**. Dans **Conversations**, crée une conversation avec un ou plusieurs PDF, puis pose une question. La réponse s’affiche avec ses sources cliquables. Chaque source ouvre le PDF à la page citée. Utilise **Sources** pour modifier les PDF interrogés et **Historique** pour rouvrir une conversation.
 
 Le frontend commence par les 30 messages les plus récents. L’API conserve son ordre chronologique par défaut et accepte `order=desc` sur la route de l’historique. Le lecteur PDF est chargé lors de l’ouverture d’une citation.
+
+## Candidat à la livraison (M6)
+
+La migration `0005_request_limits` ajoute des compteurs PostgreSQL partagés. La connexion accepte jusqu’à cinq tentatives par minute pour un couple adresse e-mail/IP. Les limites supplémentaires s’appliquent par IP pour l’inscription et par compte pour les imports et les questions. Une requête bloquée reçoit `429` et un en-tête `Retry-After`. Le relais purge périodiquement les anciens compteurs. En déploiement derrière un proxy, configure les adresses de proxy de confiance pour que FastAPI voie la bonne adresse client.
+
+Le test Playwright démarre une API et un frontend isolés. Il vérifie l’inscription, l’import du PDF, son indexation, la réponse, la citation, le lecteur et l’historique. Les adaptateurs IA déterministes rendent le test reproductible en CI.
+
+Pour relancer les tests sur Windows, utilise une base de test séparée nommée `docmind_test` avec pgvector, et configure sa connexion dans le terminal.
+
+```powershell
+$env:DOCMIND_TEST_DATABASE_URL = 'postgresql+psycopg://docmind_test:docmind-test-local@127.0.0.1:55435/docmind_test'
+$env:DOCMIND_DATABASE_URL = $env:DOCMIND_TEST_DATABASE_URL
+.\.venv\Scripts\python.exe -m alembic -c apps/api/alembic.ini upgrade head
+$env:DOCMIND_E2E_PYTHON = (Resolve-Path .venv\Scripts\python.exe).Path
+$env:DOCMIND_E2E_BROWSER_CHANNEL = 'msedge'
+npm.cmd --prefix apps/web run test:e2e
+```
+
+Pour mesurer la qualité du RAG avec le vrai MiniLM et Ollama, démarre Ollama avec le modèle M4, conserve la même base de test et lance le corpus synthétique.
+
+```powershell
+Set-Location apps/api
+..\..\.venv-worker\Scripts\python.exe -m tools.evaluate_rag
+```
+
+Le corpus de référence se trouve dans `apps/api/tools/rag_cases.json`. Le rapport mesure séparément la récupération de la bonne page, la présence de la réponse attendue, la citation correcte et l’abstention sur une question hors corpus.

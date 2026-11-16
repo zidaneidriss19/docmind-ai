@@ -1,0 +1,31 @@
+{
+  "documents": {
+    "atlas.pdf": [
+      "Présentation du projet Atlas.",
+      "Le budget du projet Atlas est de 75 000 euros."
+    ],
+    "prototype.pdf": [
+      "Lina Haddad coordonne les tests du prototype Delta."
+    ]
+  },
+  "cases": [
+    {
+      "id": "atlas-budget",
+      "question": "Quel est le budget du projet Atlas ?",
+      "document": "atlas.pdf",
+      "page": 2,
+      "answer_contains": "75000"
+    },
+    {
+      "id": "delta-tests",
+      "question": "Qui coordonne les tests du prototype Delta ?",
+      "document": "prototype.pdf",
+      "page": 1,
+      "answer_contains": "Lina Haddad"
+    },
+    {
+      "id": "out-of-scope",
+      "question": "Combien de lunes possède Neptune ?"
+    }
+  ]
+}
