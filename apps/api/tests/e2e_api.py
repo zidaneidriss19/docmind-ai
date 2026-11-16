@@ -6,13 +6,13 @@ from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from unittest.mock import patch
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.database import database_engine
 from app.ingestion import run_job
 from app.main import app
-from app.models import ProcessingJob
+from app.models import Document, ProcessingJob, User
 from app.rag import NO_ANSWER, Answer
 
 VECTOR = [1.0] + [0.0] * 383
@@ -39,6 +39,13 @@ def answer(_question, sources):
     )
 
 
+def clear_browser_fixtures() -> None:
+    owners = select(User.id).where(User.email.like("e2e-%@example.com"))
+    with Session(database_engine()) as db, db.begin():
+        db.execute(delete(Document).where(Document.owner_id.in_(owners)))
+        db.execute(delete(User).where(User.id.in_(owners)))
+
+
 @asynccontextmanager
 async def lifespan(_app):
     url = environ.get("DOCMIND_TEST_DATABASE_URL")
@@ -58,6 +65,7 @@ async def lifespan(_app):
         patch("app.conversations.query_vector", return_value=VECTOR),
         patch("app.conversations.generate_answer", side_effect=answer),
     ):
+        clear_browser_fixtures()
         stop = Event()
         thread = Thread(target=work, args=(stop,), daemon=True)
         thread.start()
@@ -66,6 +74,7 @@ async def lifespan(_app):
         finally:
             stop.set()
             thread.join(timeout=5)
+            clear_browser_fixtures()
 
 
 app.router.lifespan_context = lifespan
