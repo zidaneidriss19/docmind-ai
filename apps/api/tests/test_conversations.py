@@ -28,7 +28,6 @@ class OllamaTest(TestCase):
             "message": {
                 "content": json.dumps(
                     {
-                        "supported": True,
                         "answer": "Unsupported citation",
                         "source_numbers": [42],
                     }
