@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, login, logout, register, restoreSession } from './auth'
 import type { Profile } from './auth'
+import Documents from './Documents'
 import './App.css'
 
 function errorText(error: unknown) {
@@ -25,6 +26,7 @@ function App() {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const expireSession = useCallback(() => setProfile(null), [])
 
   useEffect(() => {
     let active = true
@@ -72,25 +74,29 @@ function App() {
   }
 
   return (
-    <main className="shell" aria-busy={busy || profile === undefined}>
+    <main className={profile ? "shell signed-in" : "shell"} aria-busy={busy || profile === undefined}>
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">D</span>
         DocMind AI
       </div>
 
       <section className="panel" aria-labelledby="page-title">
-        <h1 id="page-title">
-          {profile ? 'Ton espace' : creating ? 'Créer un compte' : 'Se connecter'}
-        </h1>
+        {!profile && <h1 id="page-title">{creating ? 'Créer un compte' : 'Se connecter'}</h1>}
 
         {profile === undefined ? (
           <p role="status">Vérification de la session…</p>
         ) : profile ? (
           <>
-            <p>Connecté avec <strong>{profile.email}</strong></p>
-            <button className="primary" type="button" onClick={signOut} disabled={busy}>
-              Se déconnecter
-            </button>
+            <div className="account-header">
+              <div>
+                <h1 id="page-title">Ton espace</h1>
+                <p>{profile.email}</p>
+              </div>
+              <button className="secondary" type="button" onClick={signOut} disabled={busy}>
+                Se déconnecter
+              </button>
+            </div>
+            <Documents onSessionExpired={expireSession} />
           </>
         ) : (
           <>

@@ -21,24 +21,31 @@ interface Credentials {
   password: string
 }
 
-async function request<T>(path: string, method: 'GET' | 'POST', credentials?: Credentials): Promise<T> {
-  const headers = new Headers({ Accept: 'application/json' })
-  if (method === 'POST') headers.set('X-DocMind-Request', '1')
-  if (credentials) headers.set('Content-Type', 'application/json')
+type Method = 'GET' | 'POST' | 'DELETE'
+type Body = Credentials | FormData
+type ResponseFormat = 'json' | 'blob'
+
+async function request<T>(
+  path: string, method: Method, body?: Body, format: ResponseFormat = 'json',
+): Promise<T> {
+  const headers = new Headers({ Accept: format === 'blob' ? 'application/pdf' : 'application/json' })
+  if (method !== 'GET') headers.set('X-DocMind-Request', '1')
+  if (body && !(body instanceof FormData)) headers.set('Content-Type', 'application/json')
 
   const response = await fetch(`/api/v1${path}`, {
     method,
     credentials: 'same-origin',
     cache: 'no-store',
     headers,
-    body: credentials ? JSON.stringify(credentials) : undefined,
+    body: body instanceof FormData ? body : body && JSON.stringify(body),
   })
   if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    throw new ApiError(response.status, body?.error_code ?? 'UNAVAILABLE')
+    const problem = await response.json().catch(() => null)
+    throw new ApiError(response.status, problem?.error_code ?? 'UNAVAILABLE')
   }
 
-  return (response.status === 204 ? undefined : await response.json()) as T
+  if (response.status === 204) return undefined as T
+  return (format === 'blob' ? await response.blob() : await response.json()) as T
 }
 
 export const register = (credentials: Credentials) =>
@@ -69,4 +76,16 @@ let pendingProfile: Promise<Profile | null> | undefined
 export function restoreSession() {
   pendingProfile ??= readProfile().finally(() => { pendingProfile = undefined })
   return pendingProfile
+}
+
+export async function authenticatedRequest<T>(
+  path: string, method: Method, body?: Body, format?: ResponseFormat,
+): Promise<T> {
+  try {
+    return await request<T>(path, method, body, format)
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 401) throw error
+    if (!await restoreSession()) throw error
+    return request<T>(path, method, body, format)
+  }
 }

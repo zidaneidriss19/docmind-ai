@@ -88,3 +88,36 @@ Dans un second PowerShell, lance le frontend avec les commandes de la section Fr
 En local, définis `DOCMIND_TEST_DATABASE_URL` vers une base de test migrée pour activer les tests d’intégration.
 
 L’API d’authentification est versionnée sous `/api/v1`. Les erreurs d’authentification utilisent Problem Details avec un code métier et un identifiant de requête.
+
+## Import de PDF (M2)
+
+Mets l’environnement Python à jour avec `pip install -r apps/api/requirements.txt` dans le venv. Applique `alembic upgrade head` comme dans la section M1 pour créer la table des documents.
+
+Pour développer sur ton PC pendant que MinIO est indisponible, définis cette variable dans le PowerShell de l’API avant de lancer Uvicorn.
+
+```powershell
+$env:DOCMIND_STORAGE_BACKEND = 'local'
+```
+
+Les PDF sont stockés dans `.docmind-data/documents`, ignoré par Git. Dans **Mes documents**, importe un PDF sans mot de passe de 20 Mio maximum. Tu peux consulter son état, le télécharger ou le supprimer. L’état initial est **En attente d’indexation**. Le traitement d’indexation arrive au jalon M3.
+
+Pour utiliser MinIO ou un autre service S3, crée un bucket privé et configure le processus de l’API. Utilise un bucket dédié et des identifiants ayant uniquement les droits de lecture, d’écriture et de suppression sur ses objets. Ne publie jamais les identifiants dans le dépôt.
+
+```powershell
+$env:DOCMIND_STORAGE_BACKEND = 's3'
+$env:DOCMIND_S3_BUCKET = 'docmind-documents'
+$env:DOCMIND_S3_ENDPOINT = 'http://127.0.0.1:9000'
+$env:AWS_DEFAULT_REGION = 'us-east-1'
+# Définis aussi AWS_ACCESS_KEY_ID et AWS_SECRET_ACCESS_KEY dans cette session.
+```
+
+Garde le même stockage pour une base donnée. Changer d’adaptateur ou de bucket n’effectue aucune migration des PDF existants.
+
+Pour reprendre des suppressions interrompues ou nettoyer les imports interrompus depuis plus d’une heure, lance la commande suivante dans un autre PowerShell, avec la même configuration de base et de stockage que l’API. Sans `--watch`, elle effectue un seul passage.
+
+```powershell
+Set-Location apps/api
+..\..\.venv\Scripts\python.exe -m app.recover_storage --watch
+```
+
+Les routes se trouvent sous `/api/v1/documents`. L’import utilise le champ multipart `file`. La liste accepte `limit` et `offset`. Les téléchargements sont servis par l’API après vérification du propriétaire.
