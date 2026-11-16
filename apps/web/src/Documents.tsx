@@ -14,6 +14,16 @@ const statusLabels: Record<DocumentStatus, string> = {
   FAILED: 'Échec de l’indexation',
 }
 
+const processingErrors: Record<string, string> = {
+  NO_EXTRACTABLE_TEXT: 'Ce PDF ne contient pas de texte extractible.',
+  PDF_PAGE_LIMIT: 'Ce PDF dépasse la limite de 500 pages.',
+  PDF_TEXT_LIMIT: 'Ce PDF contient trop de texte à indexer.',
+  INVALID_PDF: 'Le PDF est illisible.',
+  PDF_INTEGRITY_ERROR: 'Le fichier stocké ne correspond plus au PDF importé.',
+  ENCRYPTED_PDF: 'Ce PDF est protégé par un mot de passe.',
+  WORKER_INTERRUPTED: 'L’indexation a été interrompue. Tu peux la relancer.',
+}
+
 const number = new Intl.NumberFormat('fr', { maximumFractionDigits: 1 })
 const date = new Intl.DateTimeFormat('fr', { dateStyle: 'medium' })
 const maxBytes = 20 * 1024 * 1024
@@ -56,11 +66,15 @@ export default function Documents({ onSessionExpired }: { onSessionExpired: () =
 
   useEffect(() => {
     let current = true
+    let poll: number | undefined
     listDocuments(offset).then(
       (result) => {
         if (!current) return
         setPage(result)
         setLoading(false)
+        if (result.items.some(({ status }) => status === 'UPLOADED' || status === 'PROCESSING')) {
+          poll = window.setTimeout(() => setReload((value) => value + 1), 3000)
+        }
       },
       (reason: unknown) => {
         if (!current) return
@@ -69,7 +83,10 @@ export default function Documents({ onSessionExpired }: { onSessionExpired: () =
         setLoading(false)
       },
     )
-    return () => { current = false }
+    return () => {
+      current = false
+      window.clearTimeout(poll)
+    }
   }, [offset, reload, onSessionExpired])
 
   function load(newOffset = offset) {
@@ -147,7 +164,13 @@ export default function Documents({ onSessionExpired }: { onSessionExpired: () =
               <div className="document-info">
                 <strong>{document.filename}</strong>
                 <span>{fileSize(document.size_bytes)} · {date.format(new Date(document.created_at))}</span>
-                <span className="document-status">{statusLabels[document.status]}</span>
+                <span className="document-status" aria-live="polite">
+                  {statusLabels[document.status]}
+                  {document.page_count !== null && ' · ' + document.page_count + (document.page_count === 1 ? ' page' : ' pages')}
+                </span>
+                {document.status === 'FAILED' && document.processing_error && (
+                  <span>{processingErrors[document.processing_error] ?? 'Le service est indisponible. Tu peux relancer l’indexation.'}</span>
+                )}
               </div>
               {removing === document.id ? (
                 <div className="document-actions" role="group" aria-label={`Supprimer ${document.filename}`}>

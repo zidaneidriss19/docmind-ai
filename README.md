@@ -2,6 +2,8 @@
 
 Application web pour interroger des documents PDF.
 
+Pour lancer la version actuelle, suis la section **Indexation des PDF (M3)**.
+
 - `apps/web` contient le frontend React et TypeScript, construit avec Vite.
 - `apps/api` contient l’API FastAPI.
 
@@ -66,9 +68,9 @@ finally { Pop-Location }
 
 GitHub Actions exécute ces contrôles sur les contributions vers `main` et les envois sur `main`. La vérification du frontend inclut TypeScript. Le test de santé fonctionne sans PostgreSQL. La CI démarre PostgreSQL pour tester l’authentification et vérifier les migrations.
 
-## Inscription et connexion (M1)
+## Inscription et connexion (M1/M2)
 
-Pour lancer M1 seul pendant que l’infrastructure complète est en attente, utilise PostgreSQL 18 avec le fichier Compose dédié et son volume indépendant. Depuis la racine du dépôt dans PowerShell, avec Docker Desktop démarré.
+Ces commandes concernent les révisions M1 et M2. À partir de M3, utilise le Compose avec pgvector décrit plus bas.
 
 ```powershell
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
@@ -99,7 +101,7 @@ Pour développer sur ton PC pendant que MinIO est indisponible, définis cette v
 $env:DOCMIND_STORAGE_BACKEND = 'local'
 ```
 
-Les PDF sont stockés dans `.docmind-data/documents`, ignoré par Git. Dans **Mes documents**, importe un PDF sans mot de passe de 20 Mio maximum. Tu peux consulter son état, le télécharger ou le supprimer. L’état initial est **En attente d’indexation**. Le traitement d’indexation arrive au jalon M3.
+Les PDF sont stockés dans `.docmind-data/documents`, ignoré par Git. Dans **Mes documents**, importe un PDF sans mot de passe de 20 Mio maximum. Tu peux consulter son état, le télécharger ou le supprimer. L’état initial est **En attente d’indexation**. Sous M3, le statut évolue automatiquement lorsque le worker traite le fichier.
 
 Pour utiliser MinIO ou un autre service S3, crée un bucket privé et configure le processus de l’API. Utilise un bucket dédié et des identifiants ayant uniquement les droits de lecture, d’écriture et de suppression sur ses objets. Ne publie jamais les identifiants dans le dépôt.
 
@@ -121,3 +123,52 @@ Set-Location apps/api
 ```
 
 Les routes se trouvent sous `/api/v1/documents`. L’import utilise le champ multipart `file`. La liste accepte `limit` et `offset`. Les téléchargements sont servis par l’API après vérification du propriétaire.
+
+## Indexation des PDF (M3)
+
+M3 utilise PostgreSQL 18 avec pgvector, Redis, Celery et le modèle local `all-MiniLM-L6-v2`. Le Compose M3 expose PostgreSQL et Redis sur 55434 et 16379. Il dispose de son propre volume. Pour reprendre une base M1/M2 existante, restaure un export PostgreSQL dans la nouvelle base avant d’appliquer la migration et conserve le même stockage des PDF.
+
+Depuis la racine du dépôt, dans PowerShell.
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+docker compose -f compose.ingestion.yaml up -d --wait
+.\.venv\Scripts\python.exe -m pip install -r apps/api/requirements-ingestion.txt
+if (-not (Test-Path .venv-worker\Scripts\python.exe)) { py -3.14 -m venv .venv-worker }
+.\.venv-worker\Scripts\python.exe -m pip install -r apps/api/requirements-worker.txt
+```
+
+Le worker Windows utilise Python 3.14 pour disposer d’ONNX Runtime. L’API utilise le venv existant. Configure les variables suivantes dans chaque terminal de l’API, du relais et du worker. Adapte les paramètres PostgreSQL aux valeurs de `.env`. L’API et le worker doivent utiliser le même stockage. Pour S3, reprends les variables de la section M2.
+
+```powershell
+$env:POSTGRES_PORT = '55434'
+$env:POSTGRES_PASSWORD = 'docmind-postgres-dev'
+$env:DOCMIND_BROKER_URL = 'redis://127.0.0.1:16379/0'
+$env:DOCMIND_STORAGE_BACKEND = 'local'
+$env:DOCMIND_COOKIE_SECURE = 'false'
+```
+
+Applique la migration, puis lance l’API depuis la racine.
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic -c apps/api/alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir apps/api --reload
+```
+
+Dans un deuxième terminal, démarre le relais.
+
+```powershell
+Set-Location apps/api
+..\..\.venv\Scripts\python.exe -m app.ingestion_dispatcher
+```
+
+Dans un troisième terminal, démarre le worker. Le premier traitement met en cache les poids publics dans `.docmind-data/models`. Le texte des PDF est traité sur la machine.
+
+```powershell
+Set-Location apps/api
+..\..\.venv-worker\Scripts\python.exe -m celery -A app.celery_app:celery worker --pool=solo --concurrency=1 --loglevel=info
+```
+
+Lance le frontend dans un autre terminal. Importe un PDF avec du texte sélectionnable et attends le statut **Prêt**. Chaque fragment conserve son numéro de page et un vecteur de 384 dimensions. La limite est de 500 pages et 2 000 fragments par PDF. Les PDF numérisés sans couche texte affichent un échec explicite. L’OCR est hors périmètre de M3.
+
+Les travaux restent dans PostgreSQL si Redis est indisponible. Un échec temporaire déclenche jusqu’à trois tentatives au total. Une relance manuelle crée un nouveau travail. Les nouveaux fragments sont enregistrés dans la même transaction que le passage à `READY`. La migration ajoute un travail pour chaque PDF déjà importé au statut `UPLOADED`.

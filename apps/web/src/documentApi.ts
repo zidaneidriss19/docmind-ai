@@ -8,6 +8,7 @@ export interface DocumentSummary {
   size_bytes: number
   page_count: number | null
   status: DocumentStatus
+  processing_error: string | null
   created_at: string
 }
 

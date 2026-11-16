@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.database import database_engine
 from app.documents import recover_storage
 from app.main import app
-from app.models import Document, User
+from app.models import Document, ProcessingJob, User
 from app.storage import LocalStorage, StorageError
 
 DOCUMENTS = "/api/v1/documents"
@@ -111,7 +111,12 @@ class DocumentsTest(TestCase):
             self.owner.post(f"{url}/retry", headers=MUTATION).status_code, 409
         )
         with Session(database_engine()) as db, db.begin():
-            db.get_one(Document, UUID(document["id"])).status = "FAILED"
+            document_id = UUID(document["id"])
+            db.get_one(Document, document_id).status = "FAILED"
+            job = db.scalar(
+                select(ProcessingJob).where(ProcessingJob.document_id == document_id)
+            )
+            job.status = "FAILED"
         self.assertEqual(
             self.owner.post(f"{url}/retry", headers=MUTATION).json()["status"],
             "UPLOADED",
