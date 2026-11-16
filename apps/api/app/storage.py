@@ -105,7 +105,9 @@ def get_storage() -> ObjectStorage:
     if backend == "local":
         root = environ.get("DOCMIND_STORAGE_DIR")
         if not root:
-            root = str(Path(__file__).resolve().parents[3] / ".docmind-data" / "documents")
+            root = str(
+                Path(__file__).resolve().parents[3] / ".docmind-data" / "documents"
+            )
         return LocalStorage(Path(root))
     if backend == "s3" and (bucket := environ.get("DOCMIND_S3_BUCKET")):
         return S3Storage(bucket, environ.get("DOCMIND_S3_ENDPOINT") or None)
