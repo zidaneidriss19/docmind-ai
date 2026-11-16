@@ -1,15 +1,19 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowUpRight, FileText, Layers3, MessagesSquare, Send, Sparkles, Trash2, UserRound } from 'lucide-react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { askQuestion, listMessages } from './chatApi'
 import type { Citation, Conversation, Message } from './chatApi'
 import { chatError } from './chatErrors'
+import { getDocument } from './documentApi'
+import type { DocumentSummary } from './documentApi'
 
-const PdfPreview = lazy(() => import('./PdfPreview'))
 
-export default function ChatThread({ conversation, onSources, onRemove, onSessionExpired }: {
+export default function ChatThread({ conversation, onSources, onRemove, onSessionExpired, onCitation, onDocument }: {
   conversation: Conversation
   onSources: () => void
   onRemove: () => void
+  onCitation: (source: Citation) => void
+  onDocument: (id: string) => void
   onSessionExpired: () => void
 }) {
   const [messages, setMessages] = useState<Message[]>([])
@@ -20,7 +24,9 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
   const [pending, setPending] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
-  const [citation, setCitation] = useState<Citation | null>(null)
+  const [tab, setTab] = useState<'chat' | 'sources'>('chat')
+  const [documents, setDocuments] = useState<DocumentSummary[]>([])
+  const [loadingSources, setLoadingSources] = useState(false)
   const timeline = useRef<HTMLDivElement>(null)
   const jumpToLatest = useRef(true)
   const conversationId = conversation.id
@@ -50,6 +56,17 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
     timeline.current.scrollTop = timeline.current.scrollHeight
     jumpToLatest.current = false
   }, [messages, pending])
+
+  useEffect(() => {
+    if (tab !== 'sources') return
+    let active = true
+    void Promise.allSettled(conversation.document_ids.map(getDocument)).then((results) => {
+      if (!active) return
+      setDocuments(results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []))
+      setLoadingSources(false)
+    })
+    return () => { active = false }
+  }, [tab, conversation.document_ids])
 
   async function older() {
     if (next === null) return
@@ -117,18 +134,40 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
   }
 
   return (
-    <section className="chat-thread" aria-labelledby="thread-title">
-      <header className="thread-heading">
-        <div>
-          <h1 id="thread-title">{conversation.title}</h1>
-          <p>{numDocuments} {numDocuments === 1 ? 'PDF sélectionné' : 'PDF sélectionnés'}</p>
+    <section className="chat-thread" aria-label="Chat documentaire">
+      <nav className="chat-tabs" aria-label="Chat et sources">
+        <button type="button" aria-pressed={tab === 'chat'} onClick={() => setTab('chat')}>
+          <MessagesSquare aria-hidden="true" /> Chat
+        </button>
+        <button type="button" aria-pressed={tab === 'sources'} onClick={() => {
+          if (tab === 'sources') return
+          setLoadingSources(true)
+          setTab('sources')
+        }}><Layers3 aria-hidden="true" /> Sources</button>
+      </nav>
+      {tab === 'sources' && (
+        <div className="sources-tab">
+          <div className="sources-heading">
+            <h2>Documents associés</h2>
+            <button className="secondary" type="button" onClick={onSources} disabled={sending}>Modifier</button>
+          </div>
+          {loadingSources && <p role="status">Chargement des sources…</p>}
+          {!loadingSources && !documents.length && <p>Aucun PDF disponible.</p>}
+          <ul>
+            {documents.map((document) => (
+              <li key={document.id}>
+                <button type="button" className="source-file" onClick={() => onDocument(document.id)}>
+                  <FileText aria-hidden="true" /><span>{document.filename}</span><ArrowUpRight aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button className="secondary danger" type="button" onClick={onRemove} disabled={sending}>
+            <Trash2 aria-hidden="true" /> Supprimer la conversation
+          </button>
         </div>
-        <div className="thread-tools">
-          <button className="secondary" type="button" onClick={onSources} disabled={sending}>Sources</button>
-          <button className="secondary danger" type="button" onClick={onRemove} disabled={sending}>Supprimer</button>
-        </div>
-      </header>
-      <div className="message-pane" ref={timeline} role="region" tabIndex={0} aria-label="Historique de la conversation">
+      )}
+      <div className="message-pane" hidden={tab !== 'chat'} ref={timeline} role="region" tabIndex={0} aria-label="Historique de la conversation">
         {next !== null && (
           <button className="secondary history-more" type="button" onClick={older} disabled={loadingOlder || sending}>
             {loadingOlder ? 'Chargement…' : 'Charger les messages précédents'}
@@ -144,25 +183,28 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
         <ol className="message-list" aria-live="polite" aria-relevant="additions">
           {messages.map((message) => (
             <li className={`message ${message.role}`} key={message.message_id}>
-              <span className="message-author">{message.role === 'user' ? 'Toi' : 'DocMind AI'}</span>
+                            <span className="message-icon" aria-hidden="true">{message.role === 'user' ? <UserRound /> : <Sparkles />}</span>
+              <span className="sr-only">{message.role === 'user' ? 'Toi' : 'DocMind AI'}</span>
               <p>{message.content}</p>
               {message.citations.length > 0 && (
-                <div className="citation-list" aria-label="Sources de la réponse">
+                <details className="citation-list" open><summary>Citations ({message.citations.length})</summary>
                   {message.citations.map((source, index) => (
-                    <button className="citation-card" type="button" key={source.id} onClick={() => setCitation(source)}>
-                      <span>Source {index + 1} · Page {source.page_number}</span>
+                    <button className="citation-card" type="button" key={source.id} onClick={() => onCitation(source)}>
+                                            <span className="citation-number">{index + 1}</span>
+                      <span className="citation-label">Page {source.page_number}</span>
+                      <ArrowUpRight aria-hidden="true" />
                       <small>{source.excerpt}</small>
                     </button>
                   ))}
-                </div>
+                </details>
               )}
             </li>
           ))}
-          {pending && <li className="message user"><span className="message-author">Toi</span><p>{pending}</p></li>}
+          {pending && <li className="message user"><span className="sr-only">Toi</span><p>{pending}</p></li>}
         </ol>
         {sending && <p className="chat-progress" role="status">Recherche dans les PDF et rédaction de la réponse…</p>}
       </div>
-      <form className="composer" onSubmit={send}>
+      <form className="composer" hidden={tab !== 'chat'} onSubmit={send}>
         {error && <p className="error" role="alert">{error}</p>}
         {!numDocuments && <p role="status">Ajoute un PDF prêt dans Sources pour poursuivre.</p>}
         <label htmlFor="chat-question">Ta question</label>
@@ -170,16 +212,11 @@ export default function ChatThread({ conversation, onSources, onRemove, onSessio
           <textarea id="chat-question" placeholder="Que disent les PDF sur ce sujet ?" rows={2}
             value={question} maxLength={4000} onChange={(event) => setQuestion(event.target.value)}
             onKeyDown={handleEnter} disabled={sending || loading || !numDocuments} />
-          <button className="workspace-primary" disabled={!question.trim() || sending || loading || !numDocuments}>
-            Envoyer
+          <button className="workspace-primary send-button" aria-label="Envoyer" disabled={!question.trim() || sending || loading || !numDocuments}>
+            <Send aria-hidden="true" />
           </button>
         </div>
       </form>
-      {citation && (
-        <Suspense fallback={<p role="status">Chargement du lecteur PDF…</p>}>
-          <PdfPreview citation={citation} onClose={() => setCitation(null)} onSessionExpired={onSessionExpired} />
-        </Suspense>
-      )}
     </section>
   )
 }
