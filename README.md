@@ -237,3 +237,7 @@ Set-Location apps/api
 ```
 
 Le corpus de référence se trouve dans `apps/api/tools/rag_cases.json`. Le rapport mesure séparément la récupération de la bonne page, la présence de la réponse attendue, la citation correcte et l’abstention sur une question hors corpus.
+
+## Livraison conteneurisée (M7)
+
+La configuration de production se trouve dans `compose.production.yaml`. Consulte le [guide de déploiement](infra/production/README.md) pour démarrer la pile avec Caddy, configurer HTTPS, vérifier une livraison et restaurer les données.

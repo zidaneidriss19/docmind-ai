@@ -82,10 +82,12 @@ def load_pdf(storage: ObjectStorage, key: str, checksum: str) -> bytes:
 def embedding_model():
     from fastembed import TextEmbedding
 
-    default_cache = Path(__file__).resolve().parents[3] / ".docmind-data" / "models"
+    cache = environ.get("DOCMIND_EMBEDDING_CACHE")
+    if not cache:
+        cache = str(Path(__file__).resolve().parents[3] / ".docmind-data" / "models")
     return TextEmbedding(
         model_name=MODEL_NAME,
-        cache_dir=environ.get("DOCMIND_EMBEDDING_CACHE", str(default_cache)),
+        cache_dir=cache,
         threads=2,
     )
 

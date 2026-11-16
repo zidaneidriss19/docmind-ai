@@ -1,0 +1,12 @@
+.git
+.env*
+.docmind-data
+.venv*
+**/__pycache__
+**/.ruff_cache
+**/.pytest_cache
+**/node_modules
+**/dist
+**/test-results
+**/playwright-report
+.release-check

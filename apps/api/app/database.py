@@ -13,7 +13,7 @@ def database_url() -> str | URL:
         "postgresql+psycopg",
         username=environ.get("POSTGRES_USER", "docmind"),
         password=environ["POSTGRES_PASSWORD"],
-        host="127.0.0.1",
+        host=environ.get("POSTGRES_HOST", "127.0.0.1"),
         port=int(environ.get("POSTGRES_PORT", "5432")),
         database=environ.get("POSTGRES_DB", "docmind"),
     )
